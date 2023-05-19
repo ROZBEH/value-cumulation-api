@@ -3,3 +3,4 @@
 plugins-quickstart/
 llama_index/
 llama_demo/storage/
+llama_demo/.env
