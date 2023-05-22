@@ -9,7 +9,12 @@ from llama_index import (
     StringIterableReader,
     StorageContext,
     load_index_from_storage,
+    LLMPredictor,
 )
+from langchain.llms.openai import OpenAIChat
+
+from langchain.chat_models import ChatOpenAI
+
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -46,7 +51,13 @@ def index_html_doc(path) -> GPTVectorStoreIndex:
     """
     if not path.endswith(".html") and not path.endswith(".htm"):
         raise ValueError("The file must end in .html or .htm")
-    service_context = ServiceContext.from_defaults(chunk_size_limit=512)
+    llm_predictor = LLMPredictor(
+        # llm=ChatOpenAI(model_name="gpt-4", max_tokens=512, temperature=0.1)
+        llm=OpenAIChat(model_name="gpt-4", max_tokens=512, temperature=0.1)
+    )
+    service_context = ServiceContext.from_defaults(
+        llm_predictor=llm_predictor, chunk_size_limit=512
+    )
     if not Path("./storage").is_dir():
         print("creating index")
         UnstructuredReader = download_loader("UnstructuredReader", refresh_cache=True)
@@ -108,7 +119,15 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
     with open("tmp.html", "w") as f:
         f.write(filing)
 
-    service_context = ServiceContext.from_defaults(chunk_size_limit=512)
+    llm_predictor = LLMPredictor(
+        # gpt-3.5-turbo
+        llm=ChatOpenAI(model_name="gpt-3.5-turbo", max_tokens=512, temperature=0.1)
+        # llm=OpenAIChat(model_name="gpt-4", max_tokens=512, temperature=0.1)
+    )
+
+    service_context = ServiceContext.from_defaults(
+        llm_predictor=llm_predictor, chunk_size_limit=512
+    )
     if not Path("./storage").is_dir():
         print("creating index")
         # reading the json html file approach
@@ -116,7 +135,6 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
         loader = UnstructuredReader()
         document = loader.load_data(file=Path("tmp.html"), split_documents=False)
         # read the txt file approach
-        # document = StringIterableReader().load_data(texts=[filing])
         index = GPTVectorStoreIndex.from_documents(
             document, service_context=service_context
         )
@@ -125,6 +143,8 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
         print("loading index")
         storage_context = StorageContext.from_defaults(persist_dir="./storage")
         # load index
-        index = load_index_from_storage(storage_context)
+        index = load_index_from_storage(
+            storage_context, service_context=service_context
+        )
 
     return index
