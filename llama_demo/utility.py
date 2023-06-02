@@ -105,7 +105,7 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
     query = {
         "query": {
             "query_string": {
-                "query": f'ticker:{ticker} AND filedAt:{{{year}-01-01 TO {year}-12-31}} AND formType:"{report_type}"'
+                "query": f'ticker:{ticker} AND filedAt:{{{year}-01-01 TO {year+1}-04-04}} AND formType:"{report_type}"'
             }
         },
         "from": "0",
@@ -116,7 +116,8 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
     filings = queryApi.get_filings(query)
     sec_url = filings["filings"][0]["linkToFilingDetails"]
     filing = renderApi.get_filing(sec_url)
-    with open("tmp.html", "w") as f:
+    html_file = "tmp_" + ticker + ".html"
+    with open(html_file, "w") as f:
         f.write(filing)
 
     llm_predictor = LLMPredictor(
@@ -133,7 +134,7 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
         # reading the json html file approach
         UnstructuredReader = download_loader("UnstructuredReader", refresh_cache=True)
         loader = UnstructuredReader()
-        document = loader.load_data(file=Path("tmp.html"), split_documents=False)
+        document = loader.load_data(file=Path(html_file), split_documents=False)
         # read the txt file approach
         index = GPTVectorStoreIndex.from_documents(
             document, service_context=service_context
@@ -141,10 +142,17 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
         index.storage_context.persist()
     else:
         print("loading index")
-        storage_context = StorageContext.from_defaults(persist_dir="./storage")
+        # Add intel to the index
+        UnstructuredReader = download_loader("UnstructuredReader", refresh_cache=False)
+        loader = UnstructuredReader()
+        document = loader.load_data(file=Path(html_file), split_documents=False)
         # load index
+        storage_context = StorageContext.from_defaults(persist_dir="./storage")
         index = load_index_from_storage(
             storage_context, service_context=service_context
         )
+
+        index.insert(document[0])
+        index.storage_context.persist()
 
     return index
