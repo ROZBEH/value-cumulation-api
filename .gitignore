@@ -1,5 +1,6 @@
 .DS_Store
 .vscode/
+.env
 plugins-quickstart/
 llama_index/
 llama_demo/data/
