@@ -6,4 +6,4 @@ llama_demo/data/
 llama_demo/storage/
 llama_demo/.env
 llama_demo/__pycache__/
-llama_demo/tmp.html
+llama_demo/tmp.html__pycache__
