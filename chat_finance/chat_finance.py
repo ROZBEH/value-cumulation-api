@@ -1,6 +1,9 @@
 import os
 import datetime
 from sec_api import QueryApi, RenderApi
+from logger import custom_logger
+
+
 from llama_index import (
     download_loader,
     ServiceContext,
@@ -18,7 +21,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -151,8 +153,8 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
     if html_file:
         if Path(storage_path).is_dir():
             storage_context = StorageContext.from_defaults(persist_dir=storage_path)
-            print("Index found. Loading ...")
-            print(f"Adding {ticker} to the index")
+            custom_logger.info("Index found. Loading ...")
+            custom_logger.info(f"Adding {ticker} to the index")
             UnstructuredReader = download_loader("UnstructuredReader")
             loader = UnstructuredReader()
             document = loader.load_data(file=Path(html_file), split_documents=False)
@@ -164,7 +166,7 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
             index.insert(document[0])
             index.storage_context.persist(persist_dir=storage_path)
         else:
-            print("No index Found, creating index...")
+            custom_logger.info("No index found. Creating ...")
             # reading the json html file approach
             UnstructuredReader = download_loader("UnstructuredReader")
             loader = UnstructuredReader()
@@ -177,7 +179,7 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
             index.storage_context.persist(persist_dir=storage_path)
     else:
         storage_context = StorageContext.from_defaults(persist_dir=storage_path)
-        print(f"{ticker} is already in the index. Loading ...")
+        custom_logger.info(f"{ticker} is already in the index. Loading ...")
         UnstructuredReader = download_loader("UnstructuredReader")
         index = load_index_from_storage(
             storage_context, service_context=service_context
