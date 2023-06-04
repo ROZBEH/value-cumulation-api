@@ -1,6 +1,6 @@
 from flask import Flask, request, abort, jsonify
 import os
-from llama_demo.utility import index_sec_url
+from chat_finance.chat_finance import index_sec_url
 
 app = Flask(__name__)
 
