@@ -1,5 +1,8 @@
 .DS_Store
 .vscode/
+__pycache__/
+llama_demo/*.html
+app.js
 .env
 plugins-quickstart/
 llama_index/
