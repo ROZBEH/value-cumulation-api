@@ -16,7 +16,7 @@ def index():
 
 
 @app.route("/greetings")
-def greeting(username):
+def greeting():
     ############################## Athenticate the user ##############################
     request_api_key = request.headers.get("VALUE_CUMULATION_API_KEY")
     true_api_key = os.environ.get("API_KEY")
