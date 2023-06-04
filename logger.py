@@ -18,7 +18,7 @@ class LogToFrontendHandler(logging.Handler):
         self.buffer.clear()
 
 
-custom_logger = logging.getLogger("myapp")
+custom_logger = logging.getLogger("value-cumulation")
 custom_logger.setLevel(logging.INFO)
 
 handler = LogToFrontendHandler()
