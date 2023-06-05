@@ -1,11 +1,14 @@
 import os
 import logging
 from logger import custom_logger
+from flask_cors import CORS
 
 from flask import Flask, request, abort, jsonify
 from chat_finance.chat_finance import index_sec_url
 
 app = Flask(__name__)
+CORS(app)
+# CORS(app, resources={r"/api/*": {"origins": "http://localhost:8910"}})
 
 
 @app.route("/")
