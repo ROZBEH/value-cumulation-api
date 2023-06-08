@@ -1,8 +1,31 @@
+import re
 import os
+import glob
 import datetime
 from sec_api import QueryApi, RenderApi
 from logger import custom_logger
-
+from llama_index import (
+    download_loader,
+    VectorStoreIndex,
+    ServiceContext,
+    StorageContext,
+    load_index_from_storage,
+    ListIndex,
+    LLMPredictor,
+    load_graph_from_storage,
+)
+from langchain.chains.conversation.memory import ConversationBufferMemory
+from langchain.agents import initialize_agent
+from llama_index.query_engine.transform_query_engine import TransformQueryEngine
+from llama_index.indices.query.query_transform.base import DecomposeQueryTransform
+from llama_index.langchain_helpers.agents import (
+    LlamaToolkit,
+    create_llama_chat_agent,
+    IndexToolConfig,
+)
+from langchain import OpenAI
+from llama_index.indices.composability import ComposableGraph
+from pathlib import Path
 
 from llama_index import (
     download_loader,
@@ -186,3 +209,134 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
         )
 
     return index
+
+
+def chat_bot_agent(load_index=True):
+    storage_path = os.path.join(current_dir, "storage")
+    service_context = ServiceContext.from_defaults(chunk_size=512)
+    # find all the files inside data/sec10K folder
+    html_files = glob.glob(os.path.join(current_dir, "data/sec10K/*.html"))
+
+    UnstructuredReader = download_loader("UnstructuredReader", refresh_cache=True)
+
+    loader = UnstructuredReader()
+    doc_set = {}
+    all_docs = []
+    companies = []
+    for html_file in html_files:
+        pattern = r"tmp_(.+)\.html"
+        company_name = re.search(pattern, html_file).group(1)
+        companies.append(company_name)
+        if not load_index:
+            document = loader.load_data(file=html_file, split_documents=False)
+            # insert company metadata into each company
+            for d in document:
+                d.extra_info = {"company": company_name}
+            doc_set[company_name] = document
+            all_docs.extend(document)
+
+    # set up vector indices for each company
+    service_context = ServiceContext.from_defaults(chunk_size=512)
+    # index_set = {}
+    # for company in companies:
+    #     storage_context = StorageContext.from_defaults()
+    #     cur_index = VectorStoreIndex.from_documents(
+    #         doc_set[company],
+    #         service_context=service_context,
+    #         storage_context=storage_context,
+    #     )
+    #     index_set[company] = cur_index
+    #     storage_context.persist(persist_dir=f"{storage_path}/{company}")
+
+    # Load indices from disk
+    index_set = {}
+    for company in companies:
+        storage_context = StorageContext.from_defaults(
+            persist_dir=f"{storage_path}/{company}"
+        )
+        cur_index = load_index_from_storage(storage_context=storage_context)
+        index_set[company] = cur_index
+
+    # Composing a Graph to Synthesize Answers Across 10-K Filings
+    # describe each index to help traversal of composed graph
+    index_summaries = [f"10-k Filing for {company}" for company in companies]
+
+    # define an LLMPredictor set number of output tokens
+    llm_predictor = LLMPredictor(
+        llm=OpenAI(temperature=0, max_tokens=512, model_name="gpt-3.5-turbo")
+    )
+    service_context = ServiceContext.from_defaults(llm_predictor=llm_predictor)
+    storage_context = StorageContext.from_defaults()
+
+    # define a list index over the vector indices
+    # allows us to synthesize information across each index
+    graph = ComposableGraph.from_indices(
+        ListIndex,
+        [index_set[y] for y in companies],
+        index_summaries=index_summaries,
+        service_context=service_context,
+        storage_context=storage_context,
+    )
+    root_id = graph.root_id
+
+    # [optional] save to disk
+    storage_context.persist(persist_dir=f"{storage_path}/root")
+
+    # [optional] load from disk, so you don't need to build graph from scratch
+    graph = load_graph_from_storage(
+        root_id=root_id,
+        service_context=service_context,
+        storage_context=storage_context,
+    )
+
+    ### Setting up the Tools + Langchain Chatbot Agent
+    decompose_transform = DecomposeQueryTransform(llm_predictor, verbose=True)
+    # define custom retrievers
+    custom_query_engines = {}
+    for index in index_set.values():
+        query_engine = index.as_query_engine()
+        query_engine = TransformQueryEngine(
+            query_engine,
+            query_transform=decompose_transform,
+            transform_extra_info={"index_summary": index.index_struct.summary},
+        )
+        custom_query_engines[index.index_id] = query_engine
+    custom_query_engines[graph.root_id] = graph.root_index.as_query_engine(
+        response_mode="tree_summarize",
+        verbose=True,
+    )
+    # construct query engine
+    graph_query_engine = graph.as_query_engine(
+        custom_query_engines=custom_query_engines
+    )
+
+    # tool config
+    graph_config = IndexToolConfig(
+        query_engine=graph_query_engine,
+        name=f"Graph Index",
+        description="useful for when you want to answer queries that require analyzing multiple SEC 10-K documents for Companies.",
+        tool_kwargs={"return_direct": True},
+    )
+
+    # define toolkit
+    index_configs = []
+    for company in companies:
+        query_engine = index_set[company].as_query_engine(
+            similarity_top_k=3,
+        )
+        tool_config = IndexToolConfig(
+            query_engine=query_engine,
+            name=f"Vector Index {company}",
+            description=f"useful for when you want to answer queries about the {company} SEC 10-K",
+            tool_kwargs={"return_direct": True},
+        )
+        index_configs.append(tool_config)
+
+    toolkit = LlamaToolkit(
+        index_configs=index_configs + [graph_config],
+    )
+
+    memory = ConversationBufferMemory(memory_key="chat_history")
+    llm = OpenAI(temperature=0)
+    agent_chain = create_llama_chat_agent(toolkit, llm, memory=memory, verbose=True)
+    return agent_chain
