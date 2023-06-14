@@ -3,7 +3,8 @@ import os
 import glob
 import datetime
 from sec_api import QueryApi, RenderApi
-from logger import custom_logger
+
+# from logger import custom_logger
 from llama_index import (
     download_loader,
     VectorStoreIndex,
@@ -45,6 +46,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 current_dir = os.path.dirname(os.path.abspath(__file__))
+SEC_API_KEY = os.getenv("SEC_API_KEY")
+queryApi = QueryApi(api_key=SEC_API_KEY)
+renderApi = RenderApi(api_key=SEC_API_KEY)
 
 
 def index_txt_doc(path) -> GPTVectorStoreIndex:
@@ -113,38 +117,77 @@ def is_ticker_in_file(ticker, filename="indexList.txt"):
     return ticker in tickers
 
 
-def fetch_sec_report(report_type="10-K", ticker="AAPL", year=None):
+def fetch_sec_urls(ticker="AAPL", report_type="10-K", year=None, num_years=5):
     if year is None:
         year = (
             datetime.datetime.now().year - 2
             if datetime.datetime.now().month == 1
             else datetime.datetime.now().year - 1
         )
-    SEC_API_KEY = os.getenv("SEC_API_KEY")
-    queryApi = QueryApi(api_key=SEC_API_KEY)
-    renderApi = RenderApi(api_key=SEC_API_KEY)
 
     query = {
         "query": {
             "query_string": {
-                "query": f'ticker:{ticker} AND filedAt:{{{year}-01-01 TO {year+1}-04-04}} AND formType:"{report_type}"'
+                "query": f'ticker:{ticker} AND filedAt:{{{year-num_years}-11-30 TO {year+1}-11-30}} AND formType:"{report_type}"'
             }
         },
         "from": "0",
-        "size": "10",
+        # "size": "10", # 10 of these documents
         "sort": [{"filedAt": {"order": "desc"}}],
     }
 
     filings = queryApi.get_filings(query)
-    sec_url = filings["filings"][0]["linkToFilingDetails"]
+    sec_urls = []
+    substring = "/ix?doc="
+    for filing in filings["filings"]:
+        sec_url = filing["linkToFilingDetails"]
+        if substring in sec_url:
+            sec_url = sec_url.replace(substring, "")
+
+        sec_urls.append(sec_url)
+
+    return sec_urls
+
+
+def fetch_sec_report(sec_url):
     filing = renderApi.get_filing(sec_url)
-    html_file = os.path.join(current_dir, "tmp_" + ticker + ".html")
-    with open(html_file, "w") as f:
-        f.write(filing)
-    index_list_file = os.path.join(current_dir, "indexList.txt")
-    with open(index_list_file, "a") as f:
-        f.write(ticker + "\n")
-    return html_file
+    return filing
+
+
+def prepare_sec_documents(company_list, report_type="10-K", year=None, num_years=5):
+    data_path = os.path.join(current_dir, "storage", "data", "sec10K")
+    if not os.path.exists(data_path):
+        os.makedirs(data_path)
+    for company in company_list:
+        company_path = os.path.join(data_path, company)
+        sec_urls = fetch_sec_urls(company, report_type, year, num_years)
+        if len(sec_urls) == 0:
+            # custom_logger.warning(f"No {report_type} found for {company}")
+            continue
+        if not os.path.exists(company_path):
+            os.makedirs(company_path)
+        for sec_url in sec_urls:
+            # first check if the file exists inside company_path
+            filename = sec_url.split("/")[-1]
+            filename = os.path.join(
+                company_path, filename + "l"
+            )  # adding l to make it html and not htm
+            if not os.path.exists(filename):
+                # custom_logger.info(f"Downloading {filename} for {company}")
+                with open(filename, "w") as f:
+                    f.write(fetch_sec_report(sec_url))
+
+    # return a dictionary with the key being company and the value being a list of the filenames
+    # for each company
+    company_reports = {}
+    for company in company_list:
+        company_path = os.path.join(data_path, company)
+        if not os.path.exists(company_path):
+            continue
+        file_names = os.listdir(company_path)
+        file_names = [os.path.join(company_path, file_name) for file_name in file_names]
+        company_reports[company] = file_names
+    return company_reports
 
 
 def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStoreIndex:
@@ -212,10 +255,22 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
 
 
 def chat_bot_agent(load_index=True):
+    company_list = [
+        "AAPL",
+        "MSFT",
+        "AMZN",
+        "NVDA",
+        "GOOGL",
+        "META",
+        "BRK.B",
+        "TSLA",
+        "UNH",
+    ]
+    company_reports = prepare_sec_documents(company_list=company_list)
     storage_path = os.path.join(current_dir, "storage")
     service_context = ServiceContext.from_defaults(chunk_size=512)
     # find all the files inside data/sec10K folder
-    html_files = glob.glob(os.path.join(current_dir, "data/sec10K/*.html"))
+    html_files = glob.glob(os.path.join(storage_path, "data/sec10K/*.html"))
 
     UnstructuredReader = download_loader("UnstructuredReader", refresh_cache=True)
 
@@ -263,7 +318,7 @@ def chat_bot_agent(load_index=True):
 
     # define an LLMPredictor set number of output tokens
     llm_predictor = LLMPredictor(
-        llm=OpenAI(temperature=0, max_tokens=512, model_name="gpt-3.5-turbo")
+        llm=OpenAI(temperature=0, max_tokens=512, model_name="gpt-4")
     )
     service_context = ServiceContext.from_defaults(llm_predictor=llm_predictor)
     storage_context = StorageContext.from_defaults()
@@ -340,3 +395,18 @@ def chat_bot_agent(load_index=True):
     llm = OpenAI(temperature=0)
     agent_chain = create_llama_chat_agent(toolkit, llm, memory=memory, verbose=True)
     return agent_chain
+
+
+prepare_sec_documents(
+    company_list=[
+        "AAPL",
+        "MSFT",
+        "AMZN",
+        "NVDA",
+        "GOOGL",
+        "META",
+        "BRK.B",
+        "TSLA",
+        "UNH",
+    ]
+)
