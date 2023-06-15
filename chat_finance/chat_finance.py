@@ -1,6 +1,7 @@
 import re
 import os
 import glob
+import pandas as pd
 import datetime
 from sec_api import QueryApi, RenderApi
 
@@ -106,90 +107,6 @@ def index_html_doc(path) -> GPTVectorStoreIndex:
     return index
 
 
-# for the year argument, I would like it to be the year previous to the current by default
-# write the code and have the default value be the year previous to the current year
-
-
-def is_ticker_in_file(ticker, filename="indexList.txt"):
-    filename = os.path.join(current_dir, filename)
-    with open(filename, "r") as file:
-        tickers = file.read().splitlines()
-    return ticker in tickers
-
-
-def fetch_sec_urls(ticker="AAPL", report_type="10-K", year=None, num_years=5):
-    if year is None:
-        year = (
-            datetime.datetime.now().year - 2
-            if datetime.datetime.now().month == 1
-            else datetime.datetime.now().year - 1
-        )
-
-    query = {
-        "query": {
-            "query_string": {
-                "query": f'ticker:{ticker} AND filedAt:{{{year-num_years}-11-30 TO {year+1}-11-30}} AND formType:"{report_type}"'
-            }
-        },
-        "from": "0",
-        # "size": "10", # 10 of these documents
-        "sort": [{"filedAt": {"order": "desc"}}],
-    }
-
-    filings = queryApi.get_filings(query)
-    sec_urls = []
-    substring = "/ix?doc="
-    for filing in filings["filings"]:
-        sec_url = filing["linkToFilingDetails"]
-        if substring in sec_url:
-            sec_url = sec_url.replace(substring, "")
-
-        sec_urls.append(sec_url)
-
-    return sec_urls
-
-
-def fetch_sec_report(sec_url):
-    filing = renderApi.get_filing(sec_url)
-    return filing
-
-
-def prepare_sec_documents(company_list, report_type="10-K", year=None, num_years=5):
-    data_path = os.path.join(current_dir, "storage", "data", "sec10K")
-    if not os.path.exists(data_path):
-        os.makedirs(data_path)
-    for company in company_list:
-        company_path = os.path.join(data_path, company)
-        sec_urls = fetch_sec_urls(company, report_type, year, num_years)
-        if len(sec_urls) == 0:
-            # custom_logger.warning(f"No {report_type} found for {company}")
-            continue
-        if not os.path.exists(company_path):
-            os.makedirs(company_path)
-        for sec_url in sec_urls:
-            # first check if the file exists inside company_path
-            filename = sec_url.split("/")[-1]
-            filename = os.path.join(
-                company_path, filename + "l"
-            )  # adding l to make it html and not htm
-            if not os.path.exists(filename):
-                # custom_logger.info(f"Downloading {filename} for {company}")
-                with open(filename, "w") as f:
-                    f.write(fetch_sec_report(sec_url))
-
-    # return a dictionary with the key being company and the value being a list of the filenames
-    # for each company
-    company_reports = {}
-    for company in company_list:
-        company_path = os.path.join(data_path, company)
-        if not os.path.exists(company_path):
-            continue
-        file_names = os.listdir(company_path)
-        file_names = [os.path.join(company_path, file_name) for file_name in file_names]
-        company_reports[company] = file_names
-    return company_reports
-
-
 def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStoreIndex:
     """
     Reads the contents of an html file and creates a GPTVectorStoreIndex from it.
@@ -254,19 +171,183 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
     return index
 
 
-def chat_bot_agent(load_index=True):
+def download_sec_urls(
+    all_reports_df, ticker="AAPL", report_type="10-K", year=None, num_years=5
+):
+    if year is None:
+        year = (
+            datetime.datetime.now().year - 2
+            if datetime.datetime.now().month == 1
+            else datetime.datetime.now().year - 1
+        )
+
+    query = {
+        "query": {
+            "query_string": {
+                "query": f'ticker:{ticker} AND filedAt:{{{year-num_years}-11-30 TO {year+1}-11-30}} AND formType:"{report_type}" AND NOT formType:"10-K/A" AND NOT formType:NT'
+            }
+        },
+        "from": "0",
+        # "size": "10", # 10 of these documents
+        "sort": [{"filedAt": {"order": "desc"}}],
+    }
+
+    response = queryApi.get_filings(query)
+    sec_urls = []
+    substring = "/ix?doc="
+    if response:
+        filings = response["filings"]
+    else:
+        raise ValueError("No filings found")
+    # rename the entries
+    filings = list(
+        map(
+            lambda f: {
+                "ticker": f["ticker"],
+                "cik": f["cik"],
+                "formType": f["formType"],
+                "filedAt": f["filedAt"],
+                "filingUrl": f["linkToFilingDetails"],
+                "inIndex": False,
+            },
+            filings,
+        )
+    )
+
+    for filing in filings:
+        sec_url = filing["filingUrl"]
+        if isinstance(sec_url, str) and substring in sec_url:
+            sec_url = sec_url.replace(substring, "")
+        filing["filingUrl"] = sec_url
+    new_reports_df = pd.DataFrame.from_records(filings)
+    # if all_reports_df is not empty
+    if not all_reports_df.empty:
+        new_reports_df = new_reports_df[
+            ~new_reports_df["filingUrl"].isin(all_reports_df["filingUrl"])
+        ]
+
+    all_reports_df = pd.concat([all_reports_df, new_reports_df])
+
+    return new_reports_df, all_reports_df
+
+
+def download_sec_report(sec_url):
+    filing = renderApi.get_filing(sec_url)
+    return filing
+
+
+def prepare_sec_documents(
+    company,
+    all_reports_df=pd.DataFrame(),
+    report_type="10-K",
+    year=None,
+    num_years=5,
+):
+    """
+    Downloads and saves SEC filings for a given company and report type.
+
+    Args:
+        company (str): The ticker symbol of the company to download filings for.
+        all_reports_df (pandas.DataFrame, optional): A DataFrame containing previously downloaded filings. Defaults to an empty DataFrame.
+        report_type (str, optional): The type of report to download. Defaults to "10-K".
+        year (int, optional): The year to start downloading filings from. If None, defaults to the second most recent year. Defaults to None.
+        num_years (int, optional): The number of years of filings to download. Defaults to 5.
+
+    Returns:
+        Tuple[pandas.DataFrame, pandas.DataFrame]: A tuple containing two DataFrames. The first DataFrame contains the newly downloaded filings, and the second DataFrame contains all downloaded filings (old and new).
+    """
+    data_path = os.path.join(current_dir, "storage", "data", "sec10K")
+    if not os.path.exists(data_path):
+        os.makedirs(data_path)
+    # new_reports will be reports that are going to be downloaded
+    # all_reports is old reports + new_reports
+
+    company_path = os.path.join(data_path, company)
+    new_reports_df, all_reports_df = download_sec_urls(
+        all_reports_df, company, report_type, year, num_years
+    )
+
+    rows, cols = new_reports_df.shape
+    if rows == 0:
+        # custom_logger.warning(f"No {report_type} found for {company}")
+        return None, all_reports_df
+    if not os.path.exists(company_path):
+        os.makedirs(company_path)
+    for index, row in new_reports_df.iterrows():
+        sec_url = row["filingUrl"]
+        # first check if the file exists inside company_path
+        filename = sec_url.split("/")[-1]
+        filename = os.path.join(
+            company_path, filename + "l"
+        )  # adding l to make it html and not htm
+        if not os.path.exists(filename):
+            # custom_logger.info(f"Downloading {filename} for {company}")
+            with open(filename, "w") as f:
+                report = download_sec_report(sec_url)
+                if report:
+                    f.write(report)
+                else:
+                    print("hey")
+                    # custom_logger.warning(f"Could not download {filename}")
+
+    return new_reports_df, all_reports_df
+
+
+def index_includes_report(index, report):
+    # ideally you should be able to ask the index if it includes a report like below
+    # but for now I am going to create a dataframe that includes the reports that
+    # are already in the index
+    # query_engine = new_index.as_query_engine(
+    #     include_text=False,
+    #     response_mode="tree_summarize"
+    # )
+    # response = query_engine.query(
+    #     "Example Report",
+    # )
+    # If the report has been added to the index, the response object will contain
+    # information about the report, such as its keywords and relevant triplets. If the
+    # report has not been added to the index, the response object will be empty.
+    pass
+
+
+def prepare_data_for_chatbot():
     company_list = [
         "AAPL",
         "MSFT",
-        "AMZN",
-        "NVDA",
-        "GOOGL",
-        "META",
-        "BRK.B",
-        "TSLA",
-        "UNH",
+        # "AMZN",
+        # "NVDA",
+        # "GOOGL",
+        # "META",
+        # "BRK.B",
+        # "TSLA",
+        # "UNH",
     ]
-    company_reports = prepare_sec_documents(company_list=company_list)
+    if not os.path.exists(os.path.join(current_dir, "storage", "data", "metadata.csv")):
+        all_reports_df = pd.DataFrame()
+    else:
+        all_reports_df = pd.read_csv(
+            os.path.join(current_dir, "storage", "data", "metadata.csv")
+        )
+    current_reports = pd.DataFrame()
+    for company in company_list:
+        new_reports_df, all_reports_df = prepare_sec_documents(
+            company, all_reports_df=all_reports_df
+        )
+        current_reports = pd.concat([current_reports, new_reports_df])
+
+    newly_minted_reports = {}
+    data_path = os.path.join(current_dir, "storage", "data", "sec10K")
+    for index, row in current_reports.iterrows():
+        company = row["ticker"]
+        filename = row["filingUrl"].split("/")[-1]
+        filename = os.path.join(data_path, company, filename + "l")
+        # append to the company if it is not already there
+        newly_minted_reports[company] = newly_minted_reports.get(company, []) + [
+            filename
+        ]
+
+
+def chat_bot_agent(load_index=True):
     storage_path = os.path.join(current_dir, "storage")
     service_context = ServiceContext.from_defaults(chunk_size=512)
     # find all the files inside data/sec10K folder
@@ -397,16 +478,4 @@ def chat_bot_agent(load_index=True):
     return agent_chain
 
 
-prepare_sec_documents(
-    company_list=[
-        "AAPL",
-        "MSFT",
-        "AMZN",
-        "NVDA",
-        "GOOGL",
-        "META",
-        "BRK.B",
-        "TSLA",
-        "UNH",
-    ]
-)
+prepare_data_for_chatbot()
