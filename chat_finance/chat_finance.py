@@ -333,6 +333,12 @@ def prepare_data_for_chatbot():
         new_reports_df, all_reports_df = prepare_sec_documents(
             company, all_reports_df=all_reports_df
         )
+        # save the all_reports_df to metadata.csv
+        # custom_logger.info(f"Saving metadata.csv")
+        all_reports_df.to_csv(
+            os.path.join(current_dir, "storage", "data", "metadata.csv"), index=False
+        )
+        # custom_logger.info(f"Successfully saved metadata.csv")
         current_reports = pd.concat([current_reports, new_reports_df])
 
     newly_minted_reports = {}
@@ -345,30 +351,43 @@ def prepare_data_for_chatbot():
         newly_minted_reports[company] = newly_minted_reports.get(company, []) + [
             filename
         ]
+    return newly_minted_reports
 
 
 def chat_bot_agent(load_index=True):
-    storage_path = os.path.join(current_dir, "storage")
+    new_reports = prepare_data_for_chatbot()
+    storage_path = os.path.join(current_dir, "storage", "index")
     service_context = ServiceContext.from_defaults(chunk_size=512)
-    # find all the files inside data/sec10K folder
-    html_files = glob.glob(os.path.join(storage_path, "data/sec10K/*.html"))
-
     UnstructuredReader = download_loader("UnstructuredReader", refresh_cache=True)
+
+    # loader = UnstructuredReader()
+    # doc_set = {}
+    # all_docs = []
+    # companies = []
+    # for html_file in html_files:
+    #     pattern = r"tmp_(.+)\.html"
+    #     company_name = re.search(pattern, html_file).group(1)
+    #     companies.append(company_name)
+    #     if not load_index:
+    #         document = loader.load_data(file=html_file, split_documents=False)
+    #         # insert company metadata into each company
+    #         for d in document:
+    #             d.extra_info = {"company": company_name}
+    #         doc_set[company_name] = document
+    #         all_docs.extend(document)
 
     loader = UnstructuredReader()
     doc_set = {}
     all_docs = []
     companies = []
-    for html_file in html_files:
-        pattern = r"tmp_(.+)\.html"
-        company_name = re.search(pattern, html_file).group(1)
-        companies.append(company_name)
-        if not load_index:
+    for company in new_reports:
+        companies.append(company)
+        for html_file in new_reports[company]:
             document = loader.load_data(file=html_file, split_documents=False)
             # insert company metadata into each company
             for d in document:
-                d.extra_info = {"company": company_name}
-            doc_set[company_name] = document
+                d.extra_info = {"company": company}
+            doc_set[company] = document
             all_docs.extend(document)
 
     # set up vector indices for each company
