@@ -360,22 +360,6 @@ def chat_bot_agent(load_index=True):
     service_context = ServiceContext.from_defaults(chunk_size=512)
     UnstructuredReader = download_loader("UnstructuredReader", refresh_cache=True)
 
-    # loader = UnstructuredReader()
-    # doc_set = {}
-    # all_docs = []
-    # companies = []
-    # for html_file in html_files:
-    #     pattern = r"tmp_(.+)\.html"
-    #     company_name = re.search(pattern, html_file).group(1)
-    #     companies.append(company_name)
-    #     if not load_index:
-    #         document = loader.load_data(file=html_file, split_documents=False)
-    #         # insert company metadata into each company
-    #         for d in document:
-    #             d.extra_info = {"company": company_name}
-    #         doc_set[company_name] = document
-    #         all_docs.extend(document)
-
     loader = UnstructuredReader()
     doc_set = {}
     all_docs = []
@@ -414,7 +398,7 @@ def chat_bot_agent(load_index=True):
                 cur_index.insert(report)
         storage_context.persist(persist_dir=f"{storage_path}/{company}")
 
-    # Load indices from disk
+    # Load indices from disk. This also includes the most recent indexes
     index_set = {}
     for company in companies:
         storage_context = StorageContext.from_defaults(
@@ -436,6 +420,7 @@ def chat_bot_agent(load_index=True):
 
     # define a list index over the vector indices
     # allows us to synthesize information across each index
+    custom_logger.info("building graph")
     graph = ComposableGraph.from_indices(
         ListIndex,
         [index_set[y] for y in companies],
@@ -449,6 +434,7 @@ def chat_bot_agent(load_index=True):
     storage_context.persist(persist_dir=f"{storage_path}/root")
 
     # [optional] load from disk, so you don't need to build graph from scratch
+    custom_logger.info("loading graph")
     graph = load_graph_from_storage(
         root_id=root_id,
         service_context=service_context,
