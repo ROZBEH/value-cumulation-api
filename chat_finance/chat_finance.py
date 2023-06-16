@@ -387,21 +387,32 @@ def chat_bot_agent(load_index=True):
             # insert company metadata into each company
             for d in document:
                 d.extra_info = {"company": company}
-            doc_set[company] = document
+            doc_set[company] = doc_set.get(company, []) + [document]
             all_docs.extend(document)
 
     # set up vector indices for each company
     service_context = ServiceContext.from_defaults(chunk_size=512)
-    # index_set = {}
-    # for company in companies:
-    #     storage_context = StorageContext.from_defaults()
-    #     cur_index = VectorStoreIndex.from_documents(
-    #         doc_set[company],
-    #         service_context=service_context,
-    #         storage_context=storage_context,
-    #     )
-    #     index_set[company] = cur_index
-    #     storage_context.persist(persist_dir=f"{storage_path}/{company}")
+    for company in companies:
+        storage_context = StorageContext.from_defaults()
+        for i, report in enumerate(doc_set[company]):
+            if i == 0:
+                # first check if the index already exists in storage_path/company path
+                if os.path.exists(f"{storage_path}/{company}"):
+                    # Overwrite the storage context if it already exists
+                    storage_context = StorageContext.from_defaults(
+                        persist_dir=f"{storage_path}/{company}"
+                    )
+                    cur_index = load_index_from_storage(storage_context=storage_context)
+                    cur_index.insert(report)
+                else:
+                    cur_index = VectorStoreIndex.from_documents(
+                        report,
+                        service_context=service_context,
+                        storage_context=storage_context,
+                    )
+            else:
+                cur_index.insert(report)
+        storage_context.persist(persist_dir=f"{storage_path}/{company}")
 
     # Load indices from disk
     index_set = {}
