@@ -5,7 +5,7 @@ import pandas as pd
 import datetime
 from sec_api import QueryApi, RenderApi
 
-# from logger import custom_logger
+from logger import custom_logger
 from llama_index import (
     download_loader,
     VectorStoreIndex,
@@ -269,7 +269,7 @@ def prepare_sec_documents(
 
     rows, cols = new_reports_df.shape
     if rows == 0:
-        # custom_logger.warning(f"No {report_type} found for {company}")
+        custom_logger.warning(f"No {report_type} found for {company}")
         return None, all_reports_df
     if not os.path.exists(company_path):
         os.makedirs(company_path)
@@ -281,14 +281,14 @@ def prepare_sec_documents(
             company_path, filename + "l"
         )  # adding l to make it html and not htm
         if not os.path.exists(filename):
-            # custom_logger.info(f"Downloading {filename} for {company}")
+            custom_logger.info(f"Downloading {filename} for {company}")
             with open(filename, "w") as f:
                 report = download_sec_report(sec_url)
                 if report:
                     f.write(report)
                 else:
                     print("hey")
-                    # custom_logger.warning(f"Could not download {filename}")
+                    custom_logger.warning(f"Could not download {filename}")
 
     return new_reports_df, all_reports_df
 
@@ -313,7 +313,7 @@ def index_includes_report(index, report):
 def prepare_data_for_chatbot():
     company_list = [
         "AAPL",
-        "MSFT",
+        # "MSFT",
         # "AMZN",
         # "NVDA",
         # "GOOGL",
@@ -334,11 +334,11 @@ def prepare_data_for_chatbot():
             company, all_reports_df=all_reports_df
         )
         # save the all_reports_df to metadata.csv
-        # custom_logger.info(f"Saving metadata.csv")
+        custom_logger.info(f"Saving metadata.csv")
         all_reports_df.to_csv(
             os.path.join(current_dir, "storage", "data", "metadata.csv"), index=False
         )
-        # custom_logger.info(f"Successfully saved metadata.csv")
+        custom_logger.info(f"Successfully saved metadata.csv")
         current_reports = pd.concat([current_reports, new_reports_df])
 
     newly_minted_reports = {}
@@ -354,7 +354,7 @@ def prepare_data_for_chatbot():
     return newly_minted_reports
 
 
-def chat_bot_agent(load_index=True):
+def chat_bot_agent():
     new_reports = prepare_data_for_chatbot()
     storage_path = os.path.join(current_dir, "storage", "index")
     service_context = ServiceContext.from_defaults(chunk_size=512)
@@ -387,7 +387,10 @@ def chat_bot_agent(load_index=True):
                         persist_dir=f"{storage_path}/{company}"
                     )
                     cur_index = load_index_from_storage(storage_context=storage_context)
-                    cur_index.insert(report)
+                    custom_logger.info(f"type of report is {type(report)}")
+                    custom_logger.info(f"lenth of report is {len(report)}")
+                    for doc in report:
+                        cur_index.insert(doc)
                 else:
                     cur_index = VectorStoreIndex.from_documents(
                         report,
@@ -395,7 +398,10 @@ def chat_bot_agent(load_index=True):
                         storage_context=storage_context,
                     )
             else:
-                cur_index.insert(report)
+                custom_logger.info(f"type of report is {type(report)}")
+                custom_logger.info(f"lenth of report is {len(report)}")
+                for doc in report:
+                    cur_index.insert(doc)
         storage_context.persist(persist_dir=f"{storage_path}/{company}")
 
     # Load indices from disk. This also includes the most recent indexes
@@ -413,7 +419,7 @@ def chat_bot_agent(load_index=True):
 
     # define an LLMPredictor set number of output tokens
     llm_predictor = LLMPredictor(
-        llm=OpenAI(temperature=0, max_tokens=512, model_name="gpt-4")
+        llm=ChatOpenAI(temperature=0, max_tokens=512, model_name="gpt-4")
     )
     service_context = ServiceContext.from_defaults(llm_predictor=llm_predictor)
     storage_context = StorageContext.from_defaults()
@@ -428,6 +434,7 @@ def chat_bot_agent(load_index=True):
         service_context=service_context,
         storage_context=storage_context,
     )
+    custom_logger.info("graph built")
     root_id = graph.root_id
 
     # [optional] save to disk
@@ -440,6 +447,7 @@ def chat_bot_agent(load_index=True):
         service_context=service_context,
         storage_context=storage_context,
     )
+    custom_logger.info("graph loaded")
 
     ### Setting up the Tools + Langchain Chatbot Agent
     decompose_transform = DecomposeQueryTransform(llm_predictor, verbose=True)
@@ -491,7 +499,8 @@ def chat_bot_agent(load_index=True):
     memory = ConversationBufferMemory(memory_key="chat_history")
     llm = OpenAI(temperature=0)
     agent_chain = create_llama_chat_agent(toolkit, llm, memory=memory, verbose=True)
+    custom_logger.info("Chatbot agent created")
     return agent_chain
 
 
-prepare_data_for_chatbot()
+# prepare_data_for_chatbot()
