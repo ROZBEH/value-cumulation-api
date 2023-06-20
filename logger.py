@@ -21,6 +21,16 @@ class LogToFrontendHandler(logging.Handler):
 custom_logger = logging.getLogger("value-cumulation")
 custom_logger.setLevel(logging.INFO)
 
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+# Handler for buffering logs and returning them in the /logs route
 handler = LogToFrontendHandler()
+handler.setFormatter(formatter)
 handler.setLevel(logging.INFO)
 custom_logger.addHandler(handler)
+
+# Handler for printing logs to the console
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+stream_handler.setLevel(logging.INFO)
+custom_logger.addHandler(stream_handler)
