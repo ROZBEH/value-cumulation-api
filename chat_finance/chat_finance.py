@@ -175,11 +175,8 @@ def download_sec_urls(
     all_reports_df, ticker="AAPL", report_type="10-K", year=None, num_years=5
 ):
     if year is None:
-        year = (
-            datetime.datetime.now().year - 2
-            if datetime.datetime.now().month == 1
-            else datetime.datetime.now().year - 1
-        )
+        year = datetime.datetime.now().year
+    custom_logger.info(f"year is {year}")
 
     query = {
         "query": {
@@ -387,8 +384,6 @@ def chat_bot_agent():
                         persist_dir=f"{storage_path}/{company}"
                     )
                     cur_index = load_index_from_storage(storage_context=storage_context)
-                    custom_logger.info(f"type of report is {type(report)}")
-                    custom_logger.info(f"lenth of report is {len(report)}")
                     for doc in report:
                         cur_index.insert(doc)
                 else:
@@ -398,8 +393,6 @@ def chat_bot_agent():
                         storage_context=storage_context,
                     )
             else:
-                custom_logger.info(f"type of report is {type(report)}")
-                custom_logger.info(f"lenth of report is {len(report)}")
                 for doc in report:
                     cur_index.insert(doc)
         storage_context.persist(persist_dir=f"{storage_path}/{company}")
