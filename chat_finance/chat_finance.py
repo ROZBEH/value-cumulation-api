@@ -17,7 +17,6 @@ from llama_index import (
     load_graph_from_storage,
 )
 from langchain.chains.conversation.memory import ConversationBufferMemory
-from langchain.agents import initialize_agent
 from llama_index.query_engine.transform_query_engine import TransformQueryEngine
 from llama_index.indices.query.query_transform.base import DecomposeQueryTransform
 from llama_index.langchain_helpers.agents import (
