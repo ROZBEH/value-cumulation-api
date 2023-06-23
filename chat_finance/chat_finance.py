@@ -175,12 +175,11 @@ def download_sec_urls(
 ):
     if year is None:
         year = datetime.datetime.now().year
-    custom_logger.info(f"year is {year}")
 
     query = {
         "query": {
             "query_string": {
-                "query": f'ticker:{ticker} AND filedAt:{{{year-num_years}-11-30 TO {year+1}-11-30}} AND formType:"{report_type}" AND NOT formType:"10-K/A" AND NOT formType:NT'
+                "query": f'ticker:{ticker} AND filedAt:{{{year-num_years}-11-30 TO {year}-11-30}} AND formType:"{report_type}" AND NOT formType:"10-K/A" AND NOT formType:NT'
             }
         },
         "from": "0",
@@ -371,6 +370,7 @@ def chat_bot_agent():
             all_docs.extend(document)
 
     # set up vector indices for each company
+    custom_logger.info(f"Setting up vector indices for each company")
     service_context = ServiceContext.from_defaults(chunk_size=512)
     for company in companies:
         storage_context = StorageContext.from_defaults()
@@ -381,6 +381,9 @@ def chat_bot_agent():
                     # Overwrite the storage context if it already exists
                     storage_context = StorageContext.from_defaults(
                         persist_dir=f"{storage_path}/{company}"
+                    )
+                    custom_logger.info(
+                        "Index already exists. Loading from disk and adding new documents"
                     )
                     cur_index = load_index_from_storage(storage_context=storage_context)
                     for doc in report:
@@ -395,29 +398,35 @@ def chat_bot_agent():
                 for doc in report:
                     cur_index.insert(doc)
         storage_context.persist(persist_dir=f"{storage_path}/{company}")
-
+    custom_logger.info(f"Finished setting up vector indices for each company")
     # Load indices from disk. This also includes the most recent indexes
     index_set = {}
+    custom_logger.info(f"Loading indices from disk")
     for company in companies:
         storage_context = StorageContext.from_defaults(
             persist_dir=f"{storage_path}/{company}"
         )
         cur_index = load_index_from_storage(storage_context=storage_context)
         index_set[company] = cur_index
+    custom_logger.info(f"Finished loading indices from disk")
 
     # Composing a Graph to Synthesize Answers Across 10-K Filings
     # describe each index to help traversal of composed graph
-    index_summaries = [f"10-k Filing for {company}" for company in companies]
+    index_summaries = [
+        f"10-k Filing and financial report for {company} for years 2019 through 2022"
+        for company in companies
+    ]
 
     # define an LLMPredictor set number of output tokens
     llm_predictor = LLMPredictor(
-        llm=ChatOpenAI(temperature=0, max_tokens=512, model_name="gpt-4")
+        llm=ChatOpenAI(temperature=0, max_tokens=512, model_name="gpt-4", client=None)
     )
     service_context = ServiceContext.from_defaults(llm_predictor=llm_predictor)
     storage_context = StorageContext.from_defaults()
 
     # define a list index over the vector indices
     # allows us to synthesize information across each index
+
     custom_logger.info("building graph")
     graph = ComposableGraph.from_indices(
         ListIndex,
@@ -466,7 +475,7 @@ def chat_bot_agent():
     graph_config = IndexToolConfig(
         query_engine=graph_query_engine,
         name=f"Graph Index",
-        description="useful for when you want to answer queries that require analyzing multiple SEC 10-K documents for Companies.",
+        description="Useful for when you want to answer queries that require analyzing multiple financial reports for different companies. When someone asks you question about specific company, don't assume anything. Go and read the report and find the answer. If you suspect the answer should be a number then give your answers in the form of a number",
         tool_kwargs={"return_direct": True},
     )
 
@@ -476,10 +485,11 @@ def chat_bot_agent():
         query_engine = index_set[company].as_query_engine(
             similarity_top_k=3,
         )
+
         tool_config = IndexToolConfig(
             query_engine=query_engine,
             name=f"Vector Index {company}",
-            description=f"useful for when you want to answer queries about the {company} SEC 10-K",
+            description=f"useful for when you want to answer queries about the {company} financial reports. When someone asks you question about specific company, don't assume anything. Go and read the report and find the answer. If you suspect the answer should be a number then give your answers in the form of a number",
             tool_kwargs={"return_direct": True},
         )
         index_configs.append(tool_config)
@@ -490,8 +500,10 @@ def chat_bot_agent():
 
     custom_logger.info("Building conversation buffer memory")
     memory = ConversationBufferMemory(memory_key="chat_history")
-    llm = OpenAI(temperature=0)
-    agent_chain = create_llama_chat_agent(toolkit, llm, memory=memory, verbose=True)
+    llm = ChatOpenAI(temperature=0, model_name="gpt-4", client=None)
+    agent_chain = create_llama_chat_agent(
+        toolkit, llm, memory=memory, verbose=True, handle_parsing_errors=True
+    )
     custom_logger.info("Chatbot agent created")
     return agent_chain
 
