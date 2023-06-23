@@ -488,6 +488,7 @@ def chat_bot_agent():
         index_configs=index_configs + [graph_config],
     )
 
+    custom_logger.info("Building conversation buffer memory")
     memory = ConversationBufferMemory(memory_key="chat_history")
     llm = OpenAI(temperature=0)
     agent_chain = create_llama_chat_agent(toolkit, llm, memory=memory, verbose=True)
