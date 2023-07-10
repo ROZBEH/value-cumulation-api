@@ -1,11 +1,12 @@
 import re
 import os
 import glob
+import requests
 import pandas as pd
 import datetime
 from sec_api import QueryApi, RenderApi
 
-from logger import custom_logger
+# from logger import custom_logger
 from llama_index import (
     download_loader,
     VectorStoreIndex,
@@ -47,6 +48,7 @@ from dotenv import load_dotenv
 load_dotenv()
 current_dir = os.path.dirname(os.path.abspath(__file__))
 SEC_API_KEY = os.getenv("SEC_API_KEY")
+SEC_API_ENDPOINT = os.getenv("SEC_API_ENDPOINT")
 queryApi = QueryApi(api_key=SEC_API_KEY)
 renderApi = RenderApi(api_key=SEC_API_KEY)
 
@@ -82,8 +84,8 @@ def index_html_doc(path) -> GPTVectorStoreIndex:
     if not path.endswith(".html") and not path.endswith(".htm"):
         raise ValueError("The file must end in .html or .htm")
     llm_predictor = LLMPredictor(
-        # llm=ChatOpenAI(model_name="gpt-4", max_tokens=512, temperature=0.1)
-        llm=OpenAIChat(model_name="gpt-4", max_tokens=512, temperature=0.1)
+        # llm=ChatOpenAI(model_name="gpt-4", max_tokens=512, temperature=0)
+        llm=OpenAIChat(model_name="gpt-4", max_tokens=512, temperature=0)
     )
     service_context = ServiceContext.from_defaults(
         llm_predictor=llm_predictor, chunk_size_limit=512
@@ -123,8 +125,8 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
         html_file = fetch_sec_report(report_type, ticker, year)
 
     llm_predictor = LLMPredictor(
-        llm=ChatOpenAI(model_name="gpt-3.5-turbo", max_tokens=512, temperature=0.1)
-        # llm=OpenAIChat(model_name="gpt-4", max_tokens=512, temperature=0.1)
+        llm=ChatOpenAI(model_name="gpt-3.5-turbo", max_tokens=512, temperature=0)
+        # llm=OpenAIChat(model_name="gpt-4", max_tokens=512, temperature=0)
     )
 
     service_context = ServiceContext.from_defaults(
@@ -135,8 +137,8 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
     if html_file:
         if Path(storage_path).is_dir():
             storage_context = StorageContext.from_defaults(persist_dir=storage_path)
-            custom_logger.info("Index found. Loading ...")
-            custom_logger.info(f"Adding {ticker} to the index")
+            # custom_logger.info("Index found. Loading ...")
+            # custom_logger.info(f"Adding {ticker} to the index")
             UnstructuredReader = download_loader("UnstructuredReader")
             loader = UnstructuredReader()
             document = loader.load_data(file=Path(html_file), split_documents=False)
@@ -148,7 +150,7 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
             index.insert(document[0])
             index.storage_context.persist(persist_dir=storage_path)
         else:
-            custom_logger.info("No index found. Creating ...")
+            # custom_logger.info("No index found. Creating ...")
             # reading the json html file approach
             UnstructuredReader = download_loader("UnstructuredReader")
             loader = UnstructuredReader()
@@ -161,7 +163,7 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
             index.storage_context.persist(persist_dir=storage_path)
     else:
         storage_context = StorageContext.from_defaults(persist_dir=storage_path)
-        custom_logger.info(f"{ticker} is already in the index. Loading ...")
+        # custom_logger.info(f"{ticker} is already in the index. Loading ...")
         UnstructuredReader = download_loader("UnstructuredReader")
         index = load_index_from_storage(
             storage_context, service_context=service_context
@@ -188,7 +190,6 @@ def download_sec_urls(
     }
 
     response = queryApi.get_filings(query)
-    sec_urls = []
     substring = "/ix?doc="
     if response:
         filings = response["filings"]
@@ -226,8 +227,15 @@ def download_sec_urls(
     return new_reports_df, all_reports_df
 
 
-def download_sec_report(sec_url):
-    filing = renderApi.get_filing(sec_url)
+def download_sec_report(sec_url, as_pdf=True):
+    if as_pdf:
+        api_url = (
+            SEC_API_ENDPOINT + "?token=" + SEC_API_KEY + "&url=" + sec_url + "&type=pdf"
+        )
+        filing = requests.get(api_url)
+    else:
+        filing = renderApi.get_filing(sec_url)
+
     return filing
 
 
@@ -237,6 +245,7 @@ def prepare_sec_documents(
     report_type="10-K",
     year=None,
     num_years=5,
+    as_pdf=True,
 ):
     """
     Downloads and saves SEC filings for a given company and report type.
@@ -264,7 +273,7 @@ def prepare_sec_documents(
 
     rows, cols = new_reports_df.shape
     if rows == 0:
-        custom_logger.warning(f"No {report_type} found for {company}")
+        # custom_logger.warning(f"No {report_type} found for {company}")
         return None, all_reports_df
     if not os.path.exists(company_path):
         os.makedirs(company_path)
@@ -272,18 +281,24 @@ def prepare_sec_documents(
         sec_url = row["filingUrl"]
         # first check if the file exists inside company_path
         filename = sec_url.split("/")[-1]
-        filename = os.path.join(
-            company_path, filename + "l"
-        )  # adding l to make it html and not htm
+        if as_pdf:
+            filename = os.path.join(company_path, filename.split(".")[0] + ".pdf")
+        else:
+            filename = os.path.join(
+                company_path, filename + "l"
+            )  # adding l to make it html and not htm
         if not os.path.exists(filename):
-            custom_logger.info(f"Downloading {filename} for {company}")
-            with open(filename, "w") as f:
-                report = download_sec_report(sec_url)
-                if report:
+            # custom_logger.info(f"Downloading {filename} for {company}")
+            report = download_sec_report(sec_url, as_pdf=as_pdf)
+            if report and as_pdf:
+                with open(filename, "wb") as f:
+                    f.write(report.content)
+            elif report and not as_pdf:
+                with open(filename, "wb") as f:
                     f.write(report)
-                else:
-                    print("hey")
-                    custom_logger.warning(f"Could not download {filename}")
+            else:
+                pass
+                # custom_logger.warning(f"Could not download {filename}")
 
     return new_reports_df, all_reports_df
 
@@ -329,11 +344,11 @@ def prepare_data_for_chatbot():
             company, all_reports_df=all_reports_df
         )
         # save the all_reports_df to metadata.csv
-        custom_logger.info(f"Saving metadata.csv")
+        # custom_logger.info(f"Saving metadata.csv")
         all_reports_df.to_csv(
             os.path.join(current_dir, "storage", "data", "metadata.csv"), index=False
         )
-        custom_logger.info(f"Successfully saved metadata.csv")
+        # custom_logger.info(f"Successfully saved metadata.csv")
         current_reports = pd.concat([current_reports, new_reports_df])
 
     newly_minted_reports = {}
@@ -370,7 +385,7 @@ def chat_bot_agent():
             all_docs.extend(document)
 
     # set up vector indices for each company
-    custom_logger.info(f"Setting up vector indices for each company")
+    # custom_logger.info(f"Setting up vector indices for each company")
     service_context = ServiceContext.from_defaults(chunk_size=512)
     for company in companies:
         storage_context = StorageContext.from_defaults()
@@ -382,9 +397,9 @@ def chat_bot_agent():
                     storage_context = StorageContext.from_defaults(
                         persist_dir=f"{storage_path}/{company}"
                     )
-                    custom_logger.info(
-                        "Index already exists. Loading from disk and adding new documents"
-                    )
+                    # custom_logger.info(
+                    #     "Index already exists. Loading from disk and adding new documents"
+                    # )
                     cur_index = load_index_from_storage(storage_context=storage_context)
                     for doc in report:
                         cur_index.insert(doc)
@@ -398,17 +413,17 @@ def chat_bot_agent():
                 for doc in report:
                     cur_index.insert(doc)
         storage_context.persist(persist_dir=f"{storage_path}/{company}")
-    custom_logger.info(f"Finished setting up vector indices for each company")
+    # custom_logger.info(f"Finished setting up vector indices for each company")
     # Load indices from disk. This also includes the most recent indexes
     index_set = {}
-    custom_logger.info(f"Loading indices from disk")
+    # custom_logger.info(f"Loading indices from disk")
     for company in companies:
         storage_context = StorageContext.from_defaults(
             persist_dir=f"{storage_path}/{company}"
         )
         cur_index = load_index_from_storage(storage_context=storage_context)
         index_set[company] = cur_index
-    custom_logger.info(f"Finished loading indices from disk")
+    # custom_logger.info(f"Finished loading indices from disk")
 
     # Composing a Graph to Synthesize Answers Across 10-K Filings
     # describe each index to help traversal of composed graph
@@ -418,8 +433,9 @@ def chat_bot_agent():
     ]
 
     # define an LLMPredictor set number of output tokens
+    # max_tokens=-1 will return all tokens
     llm_predictor = LLMPredictor(
-        llm=ChatOpenAI(temperature=0, max_tokens=512, model_name="gpt-4", client=None)
+        llm=ChatOpenAI(temperature=0, max_tokens=-1, model_name="gpt-4", client=None)
     )
     service_context = ServiceContext.from_defaults(llm_predictor=llm_predictor)
     storage_context = StorageContext.from_defaults()
@@ -427,7 +443,7 @@ def chat_bot_agent():
     # define a list index over the vector indices
     # allows us to synthesize information across each index
 
-    custom_logger.info("building graph")
+    # custom_logger.info("building graph")
     graph = ComposableGraph.from_indices(
         ListIndex,
         [index_set[y] for y in companies],
@@ -435,20 +451,20 @@ def chat_bot_agent():
         service_context=service_context,
         storage_context=storage_context,
     )
-    custom_logger.info("graph built")
+    # custom_logger.info("graph built")
     root_id = graph.root_id
 
     # [optional] save to disk
     storage_context.persist(persist_dir=f"{storage_path}/root")
 
     # [optional] load from disk, so you don't need to build graph from scratch
-    custom_logger.info("loading graph")
+    # custom_logger.info("loading graph")
     graph = load_graph_from_storage(
         root_id=root_id,
         service_context=service_context,
         storage_context=storage_context,
     )
-    custom_logger.info("graph loaded")
+    # custom_logger.info("graph loaded")
 
     ### Setting up the Tools + Langchain Chatbot Agent
     decompose_transform = DecomposeQueryTransform(llm_predictor, verbose=True)
@@ -498,14 +514,14 @@ def chat_bot_agent():
         index_configs=index_configs + [graph_config],
     )
 
-    custom_logger.info("Building conversation buffer memory")
+    # custom_logger.info("Building conversation buffer memory")
     memory = ConversationBufferMemory(memory_key="chat_history")
     llm = ChatOpenAI(temperature=0, model_name="gpt-4", client=None)
     agent_chain = create_llama_chat_agent(
         toolkit, llm, memory=memory, verbose=True, handle_parsing_errors=True
     )
-    custom_logger.info("Chatbot agent created")
+    # custom_logger.info("Chatbot agent created")
     return agent_chain
 
 
-# prepare_data_for_chatbot()
+prepare_data_for_chatbot()
