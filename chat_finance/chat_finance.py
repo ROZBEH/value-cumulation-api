@@ -45,6 +45,17 @@ from langchain.chat_models import ChatOpenAI
 from pathlib import Path
 from dotenv import load_dotenv
 
+# langchain imports
+from langchain.chat_models import ChatOpenAI
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import (
+    RecursiveCharacterTextSplitter,
+    CharacterTextSplitter,
+)
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import Chroma
+from langchain.chains import ConversationalRetrievalChain
+
 load_dotenv()
 current_dir = os.path.dirname(os.path.abspath(__file__))
 SEC_API_KEY = os.getenv("SEC_API_KEY")
@@ -172,11 +183,8 @@ def index_sec_url(report_type="10-K", ticker="AAPL", year=None) -> GPTVectorStor
     return index
 
 
-def download_sec_urls(
-    all_reports_df, ticker="AAPL", report_type="10-K", year=None, num_years=5
-):
-    if year is None:
-        year = datetime.datetime.now().year
+def download_sec_urls(all_reports_df, ticker="AAPL", report_type="10-K", num_years=5):
+    year = datetime.datetime.now().year
 
     query = {
         "query": {
@@ -243,7 +251,6 @@ def prepare_sec_documents(
     company,
     all_reports_df=pd.DataFrame(),
     report_type="10-K",
-    year=None,
     num_years=5,
     as_pdf=True,
 ):
@@ -268,7 +275,7 @@ def prepare_sec_documents(
 
     company_path = os.path.join(data_path, company)
     new_reports_df, all_reports_df = download_sec_urls(
-        all_reports_df, company, report_type, year, num_years
+        all_reports_df, company, report_type, num_years
     )
 
     rows, cols = new_reports_df.shape
@@ -320,9 +327,10 @@ def index_includes_report(index, report):
     pass
 
 
-def prepare_data_for_chatbot(as_pdf=True):
+def prepare_data_for_chatbot(as_pdf=True, num_years=5):
     company_list = [
         "AAPL",
+        "INTC",
         # "MSFT",
         # "AMZN",
         # "NVDA",
@@ -341,7 +349,10 @@ def prepare_data_for_chatbot(as_pdf=True):
     current_reports = pd.DataFrame()
     for company in company_list:
         new_reports_df, all_reports_df = prepare_sec_documents(
-            company, all_reports_df=all_reports_df, as_pdf=as_pdf
+            company,
+            all_reports_df=all_reports_df,
+            as_pdf=as_pdf,
+            num_years=num_years,
         )
         # save the all_reports_df to metadata.csv
         # custom_logger.info(f"Saving metadata.csv")
@@ -355,8 +366,11 @@ def prepare_data_for_chatbot(as_pdf=True):
     data_path = os.path.join(current_dir, "storage", "data", "sec10K")
     for index, row in current_reports.iterrows():
         company = row["ticker"]
-        filename = row["filingUrl"].split("/")[-1]
-        filename = os.path.join(data_path, company, filename + "l")
+        filename = row["filingUrl"].split("/")[-1].split(".")[0]
+        if as_pdf:
+            filename = os.path.join(data_path, company, filename + ".pdf")
+        else:
+            filename = os.path.join(data_path, company, filename + ".html")
         # append to the company if it is not already there
         newly_minted_reports[company] = newly_minted_reports.get(company, []) + [
             filename
@@ -364,9 +378,64 @@ def prepare_data_for_chatbot(as_pdf=True):
     return newly_minted_reports
 
 
-def chat_bot_agent_langchain():
-    new_reports = prepare_data_for_chatbot(as_pdf=True)
-    print(new_reports)
+def chat_bot_agent_langchain(persist_dir="chroma_db"):
+    persist_dir = os.path.join(current_dir, "storage", persist_dir)
+    new_reports = prepare_data_for_chatbot(as_pdf=True, num_years=2)
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=10)
+    embeddings = OpenAIEmbeddings()
+
+    doc_set = {}
+    all_docs = []
+    companies = []
+    if os.path.exists(persist_dir) and os.listdir(persist_dir):
+        db = Chroma(persist_directory=persist_dir, embedding_function=embeddings)
+    else:
+        db = None
+    for company in new_reports:
+        companies.append(company)
+        for file in new_reports[company]:
+            loader = PyPDFLoader(file)
+            documents = loader.load()
+            texts = text_splitter.split_documents(documents)
+            # insert company metadata into each company
+            if db:
+                db.add_documents(texts)
+            else:
+                db = Chroma.from_documents(
+                    texts, embeddings, persist_directory=persist_dir
+                )
+
+    db.persist()
+    retriever = db.as_retriever(search_type="similarity", search_kwargs={"k": 4})
+    qa = ConversationalRetrievalChain.from_llm(
+        llm=ChatOpenAI(model_name="gpt-4", temperature=0),
+        chain_type="stuff",
+        retriever=retriever,
+        return_source_documents=True,
+    )
+
+    chat_history = []
+    query = "who is ceo of apple"
+    result = qa({"question": query, "chat_history": chat_history})
+    print("result['answer'] = ", result["answer"])
+
+    chat_history = [(query, result["answer"])]
+    query = "Who is the ceo of Intel"
+    result = qa({"question": query, "chat_history": chat_history})
+    print("Question = ", query)
+    print(result["answer"])
+
+    chat_history = [(query, result["answer"])]
+    query = "Intel's revenue in the past couple of years"
+    result = qa({"question": query, "chat_history": chat_history})
+    print("Question = ", query)
+    print(result["answer"])
+
+    chat_history = [(query, result["answer"])]
+    query = "Apple's revenue in the past couple of years"
+    result = qa({"question": query, "chat_history": chat_history})
+    print("Question = ", query)
+    print(result["answer"])
 
 
 def chat_bot_agent_llama():
