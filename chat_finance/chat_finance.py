@@ -320,7 +320,7 @@ def index_includes_report(index, report):
     pass
 
 
-def prepare_data_for_chatbot():
+def prepare_data_for_chatbot(as_pdf=True):
     company_list = [
         "AAPL",
         # "MSFT",
@@ -341,7 +341,7 @@ def prepare_data_for_chatbot():
     current_reports = pd.DataFrame()
     for company in company_list:
         new_reports_df, all_reports_df = prepare_sec_documents(
-            company, all_reports_df=all_reports_df
+            company, all_reports_df=all_reports_df, as_pdf=as_pdf
         )
         # save the all_reports_df to metadata.csv
         # custom_logger.info(f"Saving metadata.csv")
@@ -364,8 +364,13 @@ def prepare_data_for_chatbot():
     return newly_minted_reports
 
 
-def chat_bot_agent():
-    new_reports = prepare_data_for_chatbot()
+def chat_bot_agent_langchain():
+    new_reports = prepare_data_for_chatbot(as_pdf=True)
+    print(new_reports)
+
+
+def chat_bot_agent_llama():
+    new_reports = prepare_data_for_chatbot(as_pdf=False)
     storage_path = os.path.join(current_dir, "storage", "index")
     service_context = ServiceContext.from_defaults(chunk_size=512)
     UnstructuredReader = download_loader("UnstructuredReader", refresh_cache=True)
@@ -524,4 +529,4 @@ def chat_bot_agent():
     return agent_chain
 
 
-prepare_data_for_chatbot()
+chat_bot_agent_langchain()
