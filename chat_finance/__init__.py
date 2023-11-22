@@ -1,6 +1,6 @@
 from chat_finance.chat_finance import (
-    index_txt_doc,
+    chat_bot_agent,
     index_html_doc,
     index_sec_url,
-    chat_bot_agent,
+    index_txt_doc,
 )
