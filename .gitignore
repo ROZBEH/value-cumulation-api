@@ -13,3 +13,4 @@ chat_finance/__pycache__/
 chat_finance/.chroma/
 chat_finance/tmp.html__pycache__
 .ipynb_checkpoints
+test_fetch_sec.py
