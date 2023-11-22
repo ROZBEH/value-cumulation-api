@@ -10,4 +10,6 @@ chat_finance/data/
 chat_finance/storage/
 chat_finance/.env
 chat_finance/__pycache__/
+chat_finance/.chroma/
 chat_finance/tmp.html__pycache__
+.ipynb_checkpoints
