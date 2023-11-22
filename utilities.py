@@ -1,7 +1,7 @@
 import os
+
 import pinecone
 from dotenv import load_dotenv
-from llama_index.vector_stores import PineconeVectorStore
 
 load_dotenv()
 
